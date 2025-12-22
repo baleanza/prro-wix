@@ -1,0 +1,11 @@
+{
+  "name": "wix-checkbox-prro",
+  "version": "1.0.0",
+  "description": "Serverless function for Wix to Checkbox integration",
+  "main": "api/webhook.js",
+  "dependencies": {
+    "@wix/sdk": "^1.13.0",
+    "@wix/ecom": "^1.0.485",
+    "axios": "^1.6.0"
+  }
+}
