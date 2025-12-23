@@ -1,39 +1,22 @@
-import { createClient, ApiKeyStrategy } from '@wix/sdk';
-import { orders } from '@wix/ecom';
-
-// 1. Настройка клиента Wix
-const wixClient = createClient({
-  modules: { orders },
-  auth: ApiKeyStrategy({
-    apiKey: process.env.WIX_API_KEY, 
-    siteId: process.env.WIX_SITE_ID
-  })
-});
-
-// 2. Настройка клиента Checkbox
 const CHECKBOX_API = process.env.CHECKBOX_API_URL || 'https://api.checkbox.in.ua/api/v1';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  const { orderId } = req.body;
+  // Теперь мы ожидаем объект order сразу
+  const { order } = req.body;
 
-  if (!orderId) {
-    console.error('Ошибка: Не передан orderId');
-    return res.status(400).json({ error: 'Missing orderId in request body' });
+  if (!order) {
+    console.error('Ошибка: Не передан объект order');
+    return res.status(400).json({ error: 'Missing order data in request body' });
   }
 
-  console.log(`🚀 Начинаем фискализацию заказа: ${orderId}`);
+  // Данные пришли от wix-stores-backend, структура немного проще
+  const totalAmount = order.totals.total; 
+  console.log(`🚀 Фискализация заказа ${order.number}. Сумма: ${totalAmount}`);
 
   try {
-    // --- ШАГ 1: Получаем данные заказа из Wix ---
-    const wixResponse = await wixClient.orders.getOrder(orderId);
-    const order = wixResponse.order;
-
-    if (!order) throw new Error('Заказ не найден в Wix');
-    console.log(`✅ Данные заказа получены. Сумма: ${order.priceSummary.total.amount} ${order.currency}`);
-
-    // --- ШАГ 2: Логинимся в Checkbox (Смена кассира) ---
+    // --- ШАГ 1: Логинимся в Checkbox ---
     const authResponse = await fetch(`${CHECKBOX_API}/cashier/signin`, {
       method: 'POST',
       headers: {
@@ -50,25 +33,20 @@ export default async function handler(req, res) {
 
     const authData = await authResponse.json();
     const token = authData.access_token;
-    console.log('✅ Авторизация в Checkbox успешна');
-
-    // --- ШАГ 3: Формируем чек ---
+    
+    // --- ШАГ 2: Формируем чек ---
+    // ВАЖНО: wix-stores-backend отдает item.price как число, а не объект
     const goods = order.lineItems.map(item => {
-      const price = parseFloat(item.price.amount);
-      const quantity = item.quantity;
-
       return {
         good: {
-          code: item.catalogReference?.catalogItemId || item.productName.original.substr(0, 10),
-          name: item.productName.original,
-          price: Math.round(price * 100), // Цена в копейках
+          code: item.sku || item.productId.substr(0, 10), // SKU или часть ID
+          name: item.name,
+          price: Math.round(item.price * 100), // Цена в копейках
         },
-        quantity: Math.round(quantity * 1000) // Количество в тысячных
+        quantity: Math.round(item.quantity * 1000) // Кол-во в тысячных
       };
     });
 
-    const totalAmount = parseFloat(order.priceSummary.total.amount);
-    
     const receiptPayload = {
       goods: goods,
       payments: [
@@ -83,7 +61,7 @@ export default async function handler(req, res) {
       }
     };
 
-    // --- ШАГ 4: Отправляем чек (create -> sell) ---
+    // --- ШАГ 3: Отправляем чек ---
     const receiptResponse = await fetch(`${CHECKBOX_API}/receipts/sell`, {
       method: 'POST',
       headers: {
@@ -99,22 +77,15 @@ export default async function handler(req, res) {
     }
 
     const receiptData = await receiptResponse.json();
-    const receiptId = receiptData.id;
-    console.log(`🎉 Чек успешно создан! ID: ${receiptId}`);
+    console.log(`🎉 Чек успешно создан! ID: ${receiptData.id}`);
 
     return res.status(200).json({ 
       success: true, 
-      receiptId: receiptId,
-      message: 'Fiscal receipt created successfully' 
+      receiptId: receiptData.id 
     });
 
-} catch (error) {
-    // Выводим весь объект ошибки, чтобы увидеть код ошибки Wix (401, 403, 404)
-    console.error('❌ ПОЛНАЯ ОШИБКА:', JSON.stringify(error, null, 2));
-    
-    return res.status(500).json({ 
-      error: error.message,
-      details: error // отправляем детали в ответ, чтобы увидеть их в логах Wix
-    });
+  } catch (error) {
+    console.error('❌ ОШИБКА:', error.message);
+    return res.status(500).json({ error: error.message });
   }
 }
