@@ -47,7 +47,7 @@ export default async function handler(req, res) {
     };
 
     // 2. Спроба створити чек
-    let createResponse = await createReceipt(token, receiptPayload);
+    let createResponse = await createReceipt(token, license, receiptPayload);
 
     // 3. Якщо помилка "Зміна закрита" -> Відкриваємо зміну і пробуємо знову
     if (createResponse.status === 400) {
@@ -56,9 +56,13 @@ export default async function handler(req, res) {
       if (errorData.code === 'shift.not_opened') {
         console.log('⚠️ Зміна закрита. Відкриваємо нову зміну...');
         
+        // ИСПРАВЛЕНИЕ: Добавлен заголовок X-License-Key
         const openShiftResponse = await fetch(`${CHECKBOX_API}/shifts`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: { 
+              'Authorization': `Bearer ${token}`,
+              'X-License-Key': license 
+          }
         });
 
         if (!openShiftResponse.ok) {
@@ -67,7 +71,7 @@ export default async function handler(req, res) {
 
         console.log('✅ Зміна відкрита! Повторюємо створення чека...');
         // Повторна спроба
-        createResponse = await createReceipt(token, receiptPayload);
+        createResponse = await createReceipt(token, license, receiptPayload);
       }
     }
 
@@ -87,12 +91,13 @@ export default async function handler(req, res) {
   }
 }
 
-// Допоміжна функція для запиту створення чека
-async function createReceipt(token, payload) {
+// Допоміжна функція (теперь принимает и license)
+async function createReceipt(token, license, payload) {
   return fetch(`${CHECKBOX_API}/receipts/sell`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
+        'X-License-Key': license, // Добавлено для надежности
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
