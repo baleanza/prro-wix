@@ -108,10 +108,13 @@ export default async function handler(req, res) {
       message: 'Fiscal receipt created successfully' 
     });
 
-  } catch (error) {
-    console.error('❌ ОШИБКА:', error.message);
+} catch (error) {
+    // Выводим весь объект ошибки, чтобы увидеть код ошибки Wix (401, 403, 404)
+    console.error('❌ ПОЛНАЯ ОШИБКА:', JSON.stringify(error, null, 2));
+    
     return res.status(500).json({ 
-      error: error.message 
+      error: error.message,
+      details: error // отправляем детали в ответ, чтобы увидеть их в логах Wix
     });
   }
 }
