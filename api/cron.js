@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Checkbox Env Vars Missing" });
   }
 
-  console.log(`⏰ [CRON] Старт. API URL: ${baseUrl}`);
+  console.log(`⏰ [CRON] Старт автоматичного закриття. API: ${baseUrl}`);
 
   try {
     // 1. Авторизація
@@ -28,7 +28,6 @@ module.exports = async function handler(req, res) {
     }
 
     const { access_token: token } = await authResponse.json();
-    console.log('✅ Авторизація успішна. Перевіряємо статус зміни...');
 
     // 2. Перевірка статусу зміни
     const shiftResponse = await fetch(`${baseUrl}/cashier/shift`, {
@@ -41,21 +40,15 @@ module.exports = async function handler(req, res) {
 
     if (shiftResponse.ok) {
         const shiftData = await shiftResponse.json();
-        
         if (!shiftData || shiftData.status === 'CLOSED') {
-            console.log('ℹ️ Активної зміни немає або вона вже закрита.');
+            console.log('ℹ️ Активної зміни немає. Закриття не потрібне.');
             return res.status(200).json({ message: "No active shift" });
         }
-        
-        console.log(`ℹ️ Зміна відкрита (ID: ${shiftData.id}). Закриваємо...`);
+        console.log(`ℹ️ Зміна ${shiftData.id} відкрита. Закриваємо...`);
     }
 
-    // --- КРОК 3: ЗАКРИТТЯ ЗМІНИ ---
-    // ВИПРАВЛЕНО: Правильний шлях для закриття - /shifts/close
-    const closeShiftUrl = `${baseUrl}/shifts/close`;
-    console.log(`📡 Відправляємо запит на закриття: ${closeShiftUrl}`);
-
-    const closeResponse = await fetch(closeShiftUrl, {
+    // 3. Закриття зміни
+    const closeResponse = await fetch(`${baseUrl}/shifts/close`, {
         method: 'POST',
         headers: { 
             'Authorization': `Bearer ${token}`,
@@ -65,18 +58,16 @@ module.exports = async function handler(req, res) {
     });
 
     if (closeResponse.ok) {
-        console.log('✅ Зміна успішно закрита (Z-звіт сформовано автоматично).');
-        return res.status(200).json({ success: true, message: "Shift closed" });
+        console.log('✅ Зміна успішно закрита (Z-звіт сформовано).');
+        return res.status(200).json({ success: true });
     } 
     
     const errorText = await closeResponse.text();
-    console.log(`ℹ️ Результат закриття: ${closeResponse.status} ${errorText}`);
-    
     if (errorText.includes('shift.not_opened')) {
-        return res.status(200).json({ success: true, message: "Shift was already closed" });
+        return res.status(200).json({ message: "Already closed" });
     }
 
-    throw new Error(`Помилка закриття зміни: ${errorText}`);
+    throw new Error(`Помилка закриття: ${errorText}`);
 
   } catch (error) {
     console.error('❌ CRON ERROR:', error.message);
