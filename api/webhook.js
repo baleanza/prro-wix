@@ -2,28 +2,24 @@ const CHECKBOX_API = process.env.CHECKBOX_API_URL || 'https://api.checkbox.ua/ap
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
-
   const { order } = req.body;
-  if (!order) return res.status(400).json({ error: 'Відсутні дані замовлення' });
+  if (!order) return res.status(400).json({ error: 'No data' });
 
   const pin = process.env.CHECKBOX_CASHIER_PIN;
   const license = process.env.CHECKBOX_LICENSE_KEY;
 
   try {
     // 1. Авторизація
-    const authResponse = await fetch(`${CHECKBOX_API}/cashier/signinPinCode`, {
+    const authRes = await fetch(`${CHECKBOX_API}/cashier/signinPinCode`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-License-Key': license },
       body: JSON.stringify({ pin_code: pin })
     });
-    
-    if (!authResponse.ok) throw new Error("Auth failed");
-    const { access_token: token } = await authResponse.json();
+    if (!authRes.ok) throw new Error("Auth failed");
+    const { access_token: token } = await authRes.json();
 
-    // 2. Розрахунок загальної суми для платежу
-    const totalAmount = order.lineItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
-    // 3. Формування Payload
+    // 2. Підготовка даних
+    const totalAmount = order.lineItems.reduce((s, i) => s + (i.price * i.quantity), 0);
     const receiptPayload = {
       goods: order.lineItems.map(item => ({
         good: {
@@ -40,32 +36,26 @@ export default async function handler(req, res) {
       }],
       delivery: { 
           email: order.email,
-          phone: order.phone 
+          phone: order.phone // Вже відформатований у Wix
       }
     };
 
-    // 4. Визначення типу операції (Продаж або Повернення)
+    // 3. Вибір методу (Продаж/Повернення)
     const endpoint = order.type === 'RETURN' ? '/receipts/return' : '/receipts/sell';
-    
     let response = await fetch(`${CHECKBOX_API}${endpoint}`, {
       method: 'POST',
-      headers: { 
-          'Authorization': `Bearer ${token}`, 
-          'X-License-Key': license, 
-          'Content-Type': 'application/json' 
-      },
+      headers: { 'Authorization': `Bearer ${token}`, 'X-License-Key': license, 'Content-Type': 'application/json' },
       body: JSON.stringify(receiptPayload)
     });
 
-    // 5. Якщо зміна закрита — відкриваємо
+    // 4. Обробка закритої зміни
     if (response.status === 400) {
-        const errorData = await response.clone().json();
-        if (errorData.code === 'shift.not_opened') {
+        const errData = await response.clone().json();
+        if (errData.code === 'shift.not_opened') {
             await fetch(`${CHECKBOX_API}/shifts`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}`, 'X-License-Key': license }
             });
-            // Повторний запит
             response = await fetch(`${CHECKBOX_API}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}`, 'X-License-Key': license, 'Content-Type': 'application/json' },
@@ -75,23 +65,20 @@ export default async function handler(req, res) {
     }
 
     if (!response.ok) throw new Error(await response.text());
-
     const result = await response.json();
-    console.log(`✅ Чек ${order.type} #${order.number} успішно створено. ID: ${result.id}`);
+    console.log(`✅ Чек ${order.type} #${order.number} створено: ${result.id}`);
 
-    // Нічне автозакриття (якщо замовлення прийшло пізно)
-    const currentHour = new Date().getUTCHours();
-    if (currentHour >= 20) {
+    // 5. Автозакриття вночі (22:00+ за Києвом)
+    if (new Date().getUTCHours() >= 20) {
         await fetch(`${CHECKBOX_API}/shifts/close`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'X-License-Key': license }
         });
     }
 
-    return res.status(200).json({ success: true, receiptId: result.id });
-
+    return res.status(200).json({ success: true, id: result.id });
   } catch (error) {
-    console.error('❌ Помилка фіскалізації:', error.message);
+    console.error('❌ Помилка:', error.message);
     return res.status(500).json({ error: error.message });
   }
 }
