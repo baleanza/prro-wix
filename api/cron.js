@@ -1,10 +1,11 @@
 const CHECKBOX_API = process.env.CHECKBOX_API_URL || 'https://api.checkbox.in.ua/api/v1';
 
 export default async function handler(req, res) {
-  // Перевірка, що запит прийшов від Vercel Cron (захист від випадкового запуску)
-  // Якщо хочете запускати вручну для тесту - закоментуйте цей рядок
-  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
-      // Для спрощення поки не блокуємо, але в ідеалі тут треба return 401
+  // ВИПРАВЛЕННЯ: У Node.js headers - це об'єкт, а не Map
+  const authHeader = req.headers['authorization'];
+
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      // Якщо це не Cron, можна просто залогувати, або повернути 401
       // console.log('⚠️ Запуск не від планувальника Vercel');
   }
 
@@ -18,7 +19,7 @@ export default async function handler(req, res) {
   console.log(`⏰ [CRON] Починаємо автоматичне закриття зміни...`);
 
   try {
-    // 1. Логінимось (отримуємо токен)
+    // 1. Логінимось
     const authResponse = await fetch(`${CHECKBOX_API}/cashier/signinPinCode`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-License-Key': license },
@@ -31,7 +32,7 @@ export default async function handler(req, res) {
 
     const { access_token: token } = await authResponse.json();
 
-    // 2. Робимо Z-звіт (Закриваємо зміну)
+    // 2. Робимо Z-звіт
     const zReportResponse = await fetch(`${CHECKBOX_API}/shifts/z_reports`, {
         method: 'POST',
         headers: { 
@@ -46,19 +47,8 @@ export default async function handler(req, res) {
         return res.status(200).json({ success: true, message: "Shift closed" });
     } 
     
-    // Якщо помилка 400 - можливо зміна вже закрита або не відкривалась
     const errorText = await zReportResponse.text();
     console.log(`ℹ️ Результат закриття: ${zReportResponse.status} ${errorText}`);
     
-    // Якщо зміна не була відкрита - це не помилка, просто ігноруємо
-    if (errorText.includes('shift.not_opened') || errorText.includes('Зміну не відкрито')) {
-        return res.status(200).json({ success: true, message: "Shift was already closed" });
-    }
-
-    throw new Error(`Помилка Z-звіту: ${errorText}`);
-
-  } catch (error) {
-    console.error('❌ CRON ERROR:', error.message);
-    return res.status(500).json({ error: error.message });
-  }
-}
+    // Якщо зміна не була відкрита - це ОК
+    if (errorText.includes('shift.not
