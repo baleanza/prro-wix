@@ -1,11 +1,12 @@
 const CHECKBOX_API = process.env.CHECKBOX_API_URL || 'https://api.checkbox.in.ua/api/v1';
 
-export default async function handler(req, res) {
-  // ВИПРАВЛЕННЯ: У Node.js headers - це об'єкт, а не Map
+// ВИПРАВЛЕННЯ: Використовуємо module.exports замість export default
+module.exports = async function handler(req, res) {
+  
   const authHeader = req.headers['authorization'];
 
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      // Якщо це не Cron, можна просто залогувати, або повернути 401
+  // Перевірка ключа (опціонально)
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
       // console.log('⚠️ Запуск не від планувальника Vercel');
   }
 
@@ -51,4 +52,14 @@ export default async function handler(req, res) {
     console.log(`ℹ️ Результат закриття: ${zReportResponse.status} ${errorText}`);
     
     // Якщо зміна не була відкрита - це ОК
-    if (errorText.includes('shift.not
+    if (errorText.includes('shift.not_opened') || errorText.includes('Зміну не відкрито')) {
+        return res.status(200).json({ success: true, message: "Shift was already closed" });
+    }
+
+    throw new Error(`Помилка Z-звіту: ${errorText}`);
+
+  } catch (error) {
+    console.error('❌ CRON ERROR:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+};
