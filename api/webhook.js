@@ -4,99 +4,97 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
   const { order } = req.body;
+  if (!order) return res.status(400).json({ error: 'Missing order data' });
 
-  if (!order) {
-    console.error('❌ Ошибка: Не передан объект order');
-    return res.status(400).json({ error: 'Missing order data in request body' });
-  }
-
-  // Отримуємо налаштування (ліцензія + пін)
   const pin = process.env.CHECKBOX_CASHIER_PIN;
   const license = process.env.CHECKBOX_LICENSE_KEY;
 
   if (!pin || !license) {
-    console.error("❌ Не налаштовані змінні середовища CHECKBOX у Vercel!");
+    console.error("❌ Env Vars Missing");
     return res.status(500).json({ error: "Checkbox Env Vars Missing" });
   }
 
-  const totalAmount = order.totals.total; 
-  console.log(`🚀 Фіскалізація замовлення ${order.number}. Сума: ${totalAmount}`);
+  const totalAmount = order.totals.total;
+  console.log(`🚀 Обробка замовлення ${order.number}. Сума: ${totalAmount}`);
 
   try {
-    // --- ШАГ 1: Логинимся в Checkbox ---
-    // ВИПРАВЛЕНО: Правильний ендпоінт для входу по PIN-коду
-    const authUrl = `${CHECKBOX_API}/cashier/signinPinCode`;
-    
-    const authResponse = await fetch(authUrl, {
+    // 1. Авторизація (вхід касира)
+    const authResponse = await fetch(`${CHECKBOX_API}/cashier/signinPinCode`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-License-Key': license 
-      },
+      headers: { 'Content-Type': 'application/json', 'X-License-Key': license },
       body: JSON.stringify({ pin_code: pin })
     });
 
     if (!authResponse.ok) {
-      const errText = await authResponse.text();
-      console.error(`❌ Auth Fail: ${authResponse.status}`, errText);
-      throw new Error(`Помилка авторизації Checkbox: ${authResponse.status} ${errText}`);
+      throw new Error(`Auth Error: ${authResponse.status} ${await authResponse.text()}`);
     }
 
-    const authData = await authResponse.json();
-    const token = authData.access_token;
-    console.log('✅ Авторизація успішна (Token received)');
+    const { access_token: token } = await authResponse.json();
+    console.log('✅ Авторизація успішна');
 
-    // --- ШАГ 2: Формируем чек ---
-    const goods = order.lineItems.map(item => {
-      return {
-        good: {
-          code: item.sku || item.productId.substr(0, 10), 
-          name: item.name,
-          price: Math.round(item.price * 100), // ціна в копійках
-        },
-        quantity: Math.round(item.quantity * 1000) // кількість в тисячних
-      };
-    });
-
+    // Підготовка даних чека
     const receiptPayload = {
-      goods: goods,
-      payments: [
-        {
-          type: "CASHLESS",
-          value: Math.round(totalAmount * 100),
-          label: "Оплата на сайті"
-        }
-      ],
-      delivery: {
-        email: order.buyerInfo.email
-      }
+      goods: order.lineItems.map(item => ({
+        good: {
+          code: item.sku || item.productId.substr(0, 10),
+          name: item.name,
+          price: Math.round(item.price * 100),
+        },
+        quantity: Math.round(item.quantity * 1000)
+      })),
+      payments: [{ type: "CASHLESS", value: Math.round(totalAmount * 100), label: "Оплата на сайті" }],
+      delivery: { email: order.buyerInfo.email }
     };
 
-    // --- ШАГ 3: Отправляем чек ---
-    const receiptResponse = await fetch(`${CHECKBOX_API}/receipts/sell`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(receiptPayload)
-    });
+    // 2. Спроба створити чек
+    let createResponse = await createReceipt(token, receiptPayload);
 
-    if (!receiptResponse.ok) {
-      const errText = await receiptResponse.text();
-      throw new Error(`Помилка створення чека: ${receiptResponse.status} ${errText}`);
+    // 3. Якщо помилка "Зміна закрита" -> Відкриваємо зміну і пробуємо знову
+    if (createResponse.status === 400) {
+      const errorData = await createResponse.clone().json().catch(() => ({}));
+      
+      if (errorData.code === 'shift.not_opened') {
+        console.log('⚠️ Зміна закрита. Відкриваємо нову зміну...');
+        
+        const openShiftResponse = await fetch(`${CHECKBOX_API}/shifts`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!openShiftResponse.ok) {
+           throw new Error(`Не вдалося відкрити зміну: ${await openShiftResponse.text()}`);
+        }
+
+        console.log('✅ Зміна відкрита! Повторюємо створення чека...');
+        // Повторна спроба
+        createResponse = await createReceipt(token, receiptPayload);
+      }
     }
 
-    const receiptData = await receiptResponse.json();
+    // Перевірка фінального результату
+    if (!createResponse.ok) {
+      throw new Error(`Помилка продажу: ${createResponse.status} ${await createResponse.text()}`);
+    }
+
+    const receiptData = await createResponse.json();
     console.log(`🎉 Чек створено! ID: ${receiptData.id}`);
 
-    return res.status(200).json({ 
-      success: true, 
-      receiptId: receiptData.id 
-    });
+    return res.status(200).json({ success: true, receiptId: receiptData.id });
 
   } catch (error) {
     console.error('❌ CRITICAL ERROR:', error.message);
     return res.status(500).json({ error: error.message });
   }
+}
+
+// Допоміжна функція для запиту створення чека
+async function createReceipt(token, payload) {
+  return fetch(`${CHECKBOX_API}/receipts/sell`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
 }
