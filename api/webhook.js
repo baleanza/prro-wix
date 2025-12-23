@@ -41,16 +41,16 @@ export default async function handler(req, res) {
     const receiptPayload = {
       goods: order.lineItems.map(item => ({
         good: {
-          code: item.sku || item.productId.substr(0, 10),
+          code: item.sku || "CODE",
           name: item.name,
-          price: Math.round(item.price * 100), // ціна в копійках
+          price: Math.round(item.price * 100),
         },
-        quantity: Math.round(item.quantity * 1000) // кількість в тисячних
+        quantity: Math.round(item.quantity * 1000)
       })),
       payments: [{ 
-          type: "CASHLESS", 
+          type: order.paymentType || "CASHLESS", 
           value: Math.round(totalAmount * 100), 
-          label: "Оплата на сайті" 
+          label: order.paymentLabel || "Безготівкова оплата" 
       }],
       delivery: { email: order.buyerInfo.email }
     };
