@@ -6,9 +6,8 @@ import axios from 'axios';
 const wixClient = createClient({
   modules: { orders },
   auth: ApiKeyStrategy({
-    apiKey: process.env.WIX_API_KEY, // Admin API Key
-    siteId: process.env.WIX_SITE_ID,
-    accountId: process.env.WIX_ACCOUNT_ID
+    apiKey: process.env.WIX_API_KEY, 
+    siteId: process.env.WIX_SITE_ID
   })
 });
 
